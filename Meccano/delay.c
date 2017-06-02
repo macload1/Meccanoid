@@ -39,17 +39,6 @@ void delay1ms5(void) {
     TimerDisable(TIMER5_BASE, TIMER_A);
 }
 
-//void delay1ms5(void) {
-//    uint32_t i;
-//    i = 1562;
-//    while(i)
-//    {
-//        SysCtlDelay(11);
-//        i--;
-//    }
-//
-//}
-
 void delay417us(void) {
     delayCounter = 0;
     TimerLoadSet(TIMER5_BASE, TIMER_A, 20650);
@@ -57,14 +46,3 @@ void delay417us(void) {
     while(delayCounter == 0){}
     TimerDisable(TIMER5_BASE, TIMER_A);
 }
-
-//void delay417us(void) {
-//    uint32_t i;
-//    i = 118;
-//    while(i)
-//    {
-//        SysCtlDelay(50);
-//        i--;
-//    }
-//
-//}
