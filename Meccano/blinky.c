@@ -39,7 +39,6 @@
 #include "driverlib/pin_map.h"
 #include "driverlib/rom.h"
 #include "driverlib/sysctl.h"
-#include "driverlib/timer.h"
 #include "driverlib/uart.h"
 
 #include "utils/uartstdio.h"
@@ -53,13 +52,6 @@
 #define LED_BLUE        GPIO_PIN_2
 #define LED_GREEN       GPIO_PIN_3
 
-//*****************************************************************************
-//
-// The global system tick counter.
-//
-//*****************************************************************************
-volatile uint32_t g_ui32SysTickCount = 0;
-
 
 //*****************************************************************************
 //
@@ -70,22 +62,10 @@ volatile uint32_t g_ui32SysTickCount = 0;
 //! access.
 //
 //*****************************************************************************
-volatile uint32_t delayCounter;
-volatile uint32_t g_ui32Flags;
 
 // Input buffer for commands
 static char g_cInput[128];
 bool processCmdLine;
-
-
-//*****************************************************************************
-//
-// The system tick rate expressed both as ticks per second and a millisecond
-// period.
-//
-//*****************************************************************************
-#define SYSTICKS_PER_SECOND 100
-#define SYSTICK_PERIOD_MS (1000 / SYSTICKS_PER_SECOND)
 
 
 //*****************************************************************************
@@ -103,20 +83,6 @@ __error__(char *pcFilename, uint32_t ui32Line)
     }
 }
 #endif
-
-//*****************************************************************************
-//
-// Interrupt handler for the system tick counter.
-//
-//*****************************************************************************
-void
-SysTickIntHandler(void)
-{
-    //
-    // Update our system tick counter.
-    //
-    g_ui32SysTickCount++;
-}
 
 
 
@@ -297,44 +263,6 @@ tCmdLineEntry g_psCmdTable[] =
     {0,0,0}
 };
 
-
-//*****************************************************************************
-//
-// The interrupt handler for the first timer interrupt.
-//
-//*****************************************************************************
-void
-Timer0IntHandler(void)
-{
-    //
-    // Clear the timer interrupt.
-    //
-    ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
-
-    //
-    // Use the flags to Toggle the LED for this timer
-    //
-    GPIOPinWrite(GPIO_PORTB_BASE, GPIO_PIN_0, g_ui32Flags);
-    g_ui32Flags ^= 1;
-
-}
-
-//*****************************************************************************
-//
-// The interrupt handler for the fifth timer interrupt.
-//
-//*****************************************************************************
-void
-Timer5IntHandler(void)
-{
-    //
-    // Clear the timer interrupt.
-    //
-    ROM_TimerIntClear(TIMER5_BASE, TIMER_TIMA_TIMEOUT);
-
-    delayCounter++;
-}
-
 //*****************************************************************************
 //
 // Configure the UART and its pins.  This must be called before UARTprintf().
@@ -414,11 +342,9 @@ main(void)
     usb_init();
 
     //
-    // Enable the system tick.
+    // Initialise delay functions
     //
-    ROM_SysTickPeriodSet(ROM_SysCtlClockGet() / SYSTICKS_PER_SECOND);
-    ROM_SysTickIntEnable();
-    ROM_SysTickEnable();
+    delay_init();
 
     //
     // Enable the GPIO port that is used for the on-board LED.
@@ -440,47 +366,10 @@ main(void)
     GPIOPinTypeGPIOOutput(GPIO_PORTB_BASE, GPIO_PIN_0);
     GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3);
 
-
-    //
-    // Enable the peripherals used by this example.
-    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER5);
-
-    //
-    // Enable processor interrupts.
-    //
-    IntMasterEnable();
-
-    //
-    // Configure the 32-bit periodic timers.
-    //
-    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, SysCtlClockGet()/10);
-    TimerConfigure(TIMER5_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER5_BASE, TIMER_A, SysCtlClockGet()/100000);
-
-    //
-    // Setup the interrupt for the timer timeout.
-    //
-    IntEnable(INT_TIMER0A);
-    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
-    IntEnable(INT_TIMER5A);
-    TimerIntEnable(TIMER5_BASE, TIMER_TIMA_TIMEOUT);
-
-
     //
     // Initialise the Meccano Servos and LEDs
     //
     MeccanoInit();
-
-    //
-    // Enable the timers.
-    //
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 23500);
-    TimerEnable(TIMER0_BASE, TIMER_A);
-    TimerLoadSet(TIMER5_BASE, TIMER_A, 100);
-    TimerEnable(TIMER5_BASE, TIMER_A);
 
     //
     // Loop forever.

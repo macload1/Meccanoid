@@ -1,21 +1,28 @@
 #include <stdint.h>
 #include <stdbool.h>
+
 #include "inc/hw_memmap.h"
+#include "inc/hw_ints.h"
+
 #include "driverlib/gpio.h"
 #include "driverlib/pin_map.h"
 #include "driverlib/rom.h"
 #include "driverlib/rom_map.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/timer.h"
+#include "driverlib/interrupt.h"
+
 #include "utils/uartstdio.h"
-
-
 
 #include "Meccano.h"
 #include "delay.h"
 
-extern uint32_t g_ui32SysClock;
+
 extern volatile uint32_t delayCounter;
+extern uint32_t g_ui32SysClock;
+
+volatile uint32_t g_ui32Flags;
+
 
 
 #define HIGH                    1
@@ -36,6 +43,28 @@ uint8_t outputByte[4];
 
 uint8_t printOutputByte[4];
 
+
+
+//*****************************************************************************
+//
+// The interrupt handler for the first timer interrupt.
+//
+//*****************************************************************************
+void
+Timer0IntHandler(void)
+{
+    //
+    // Clear the timer interrupt.
+    //
+    ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+    //
+    // Use the flags to Toggle the LED for this timer
+    //
+    GPIOPinWrite(GPIO_PORTB_BASE, GPIO_PIN_0, g_ui32Flags);
+    g_ui32Flags ^= 1;
+
+}
 
 
 
@@ -72,7 +101,6 @@ unsigned long pulseIn(int32_t val, unsigned long timeout)
 }
 
 void MeccanoInit(void){
-
     //
     // Enable the GPIO port that is used for the on-board LED.
     //
@@ -89,6 +117,35 @@ void MeccanoInit(void){
     // Initialise the communication pin to low.
     //
     GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, 0);
+
+
+    //
+    // Enable the peripherals used by this example.
+    //
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+
+    //
+    // Enable processor interrupts.
+    //
+    IntMasterEnable();
+
+    //
+    // Configure the 32-bit periodic timers.
+    //
+    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, SysCtlClockGet()/10);
+
+    //
+    // Setup the interrupt for the timer timeout.
+    //
+    IntEnable(INT_TIMER0A);
+    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+    //
+    // Enable the timers.
+    //
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 23500);
+    TimerEnable(TIMER0_BASE, TIMER_A);
 
     return;
 }

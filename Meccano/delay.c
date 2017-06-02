@@ -8,13 +8,105 @@
 #include <stdbool.h>
 
 #include "inc/hw_memmap.h"
+#include "inc/hw_ints.h"
 
 #include "driverlib/sysctl.h"
 #include "driverlib/timer.h"
+#include "driverlib/rom.h"
+#include "driverlib/interrupt.h"
 
 #include "delay.h"
 
-extern volatile uint32_t delayCounter;
+volatile uint32_t delayCounter;
+
+
+
+//*****************************************************************************
+//
+// The global system tick counter.
+//
+//*****************************************************************************
+volatile uint32_t g_ui32SysTickCount = 0;
+
+
+//*****************************************************************************
+//
+// The system tick rate expressed both as ticks per second and a millisecond
+// period.
+//
+//*****************************************************************************
+#define SYSTICKS_PER_SECOND 100
+#define SYSTICK_PERIOD_MS (1000 / SYSTICKS_PER_SECOND)
+
+//*****************************************************************************
+//
+// Interrupt handler for the system tick counter.
+//
+//*****************************************************************************
+void
+SysTickIntHandler(void)
+{
+    //
+    // Update our system tick counter.
+    //
+    g_ui32SysTickCount++;
+}
+
+//*****************************************************************************
+//
+// The interrupt handler for the fifth timer interrupt.
+//
+//*****************************************************************************
+void
+Timer5IntHandler(void)
+{
+    //
+    // Clear the timer interrupt.
+    //
+    ROM_TimerIntClear(TIMER5_BASE, TIMER_TIMA_TIMEOUT);
+
+    delayCounter++;
+}
+
+void delay_init(void)
+{
+    //
+    // Enable the peripherals used by this example.
+    //
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER5);
+
+    //
+    // Enable processor interrupts.
+    //
+    IntMasterEnable();
+
+    //
+    // Configure the 32-bit periodic timers.
+    //
+    TimerConfigure(TIMER5_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER5_BASE, TIMER_A, SysCtlClockGet()/100000);
+
+    //
+    // Setup the interrupt for the timer timeout.
+    //
+    IntEnable(INT_TIMER5A);
+    TimerIntEnable(TIMER5_BASE, TIMER_TIMA_TIMEOUT);
+
+    //
+    // Enable the timers.
+    //
+    TimerLoadSet(TIMER5_BASE, TIMER_A, 100);
+    TimerEnable(TIMER5_BASE, TIMER_A);
+
+    //
+    // Enable the system tick.
+    //
+    ROM_SysTickPeriodSet(ROM_SysCtlClockGet() / SYSTICKS_PER_SECOND);
+    ROM_SysTickIntEnable();
+    ROM_SysTickEnable();
+
+	return;
+}
 
 void delayMs(uint32_t ui32Ms) {
 
