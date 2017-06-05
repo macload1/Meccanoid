@@ -399,7 +399,7 @@ main(void)
 
 
 
-        communicate();
+        //communicate();
         //
         // Check if a carriage return is present in the UART Buffer.
         //

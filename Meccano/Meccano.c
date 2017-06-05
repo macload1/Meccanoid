@@ -18,6 +18,24 @@
 #include "delay.h"
 
 
+
+volatile uint32_t state;
+volatile uint32_t mask;
+
+uint8_t meccanoType[3][4];
+uint8_t meccanoOutputByte[3][4] = {{0xFE, 0xFE, 0xFE, 0xFE},
+								   {0xFE, 0xFE, 0xFE, 0xFE},
+								   {0xFE, 0xFE, 0xFE, 0xFE}};
+
+uint8_t meccanoChecksum[3];
+uint8_t meccanoTempByte[3];
+
+uint8_t meccanoModuleNum[3] = {0, 0, 0};
+
+volatile bool chargeNewValue;
+volatile bool meccanoTimeout;
+
+
 extern volatile uint32_t delayCounter;
 extern uint32_t g_ui32SysClock;
 
@@ -35,13 +53,9 @@ uint8_t moduleNum = 0;
 uint8_t inputByte;
 uint8_t checkSum;
 int ledOrder = 0;
-int printModNum = 0;
-int bitDelay = 417;
 
 uint8_t moduleType[4];
 uint8_t outputByte[4];
-
-uint8_t printOutputByte[4];
 
 
 
@@ -53,54 +67,177 @@ uint8_t printOutputByte[4];
 void
 Timer0IntHandler(void)
 {
+	uint8_t outputValue;
     //
     // Clear the timer interrupt.
     //
     ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
     //
-    // Use the flags to Toggle the LED for this timer
+    // Treat the Interrupt
     //
-    GPIOPinWrite(GPIO_PORTB_BASE, GPIO_PIN_0, g_ui32Flags);
-    g_ui32Flags ^= 1;
+    if(state == 0)
+    {
+    	outputValue = 0xFF;
+    	meccanoChecksum[0] = calculateCheckSum(meccanoOutputByte[0][0],
+											   meccanoOutputByte[0][1],
+											   meccanoOutputByte[0][2],
+											   meccanoOutputByte[0][3]);
+    }
+    else if(state < 5)
+    {
+    	outputValue = meccanoOutputByte[0][state-1];
+    }
+    else if(state == 5)
+    {
+    	outputValue = meccanoChecksum[0];
+    }
 
+    if((mask == 0) && (state < 6))
+    {
+        GPIOPinTypeGPIOOutput(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);
+        GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, LOW);						// send 0
+        TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_417US);
+        mask = 0x01;
+    }
+    else if((mask < 0x100) && (mask > 0) && (state < 6))
+    {
+    	if (outputValue & mask)
+    	{   // if bitwise AND resolves to true
+			GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);  	// send 1
+		}else
+		{   // if bitwise and resolves to false
+			GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, LOW);               	// send 0
+		}
+        mask <<= 1;
+    }
+    else if((mask == 0x100) && (state < 6))
+    {
+    	GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);  		// send 1
+    	mask <<= 1;
+    }
+    else if((mask == 0x200) && (state < 6))
+    {
+    	GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);  		// send 1
+    	mask = 0;
+    	state += 1;
+    }
+    else if((mask == 0) && (state == 6))
+    {
+		GPIOPinTypeGPIOInput(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);  			// Init GPIO as input
+		mask = 0x01;
+		meccanoTimeout = true;
+        TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_3000US);
+		GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);      // Clear pending interrupts for GPIO
+		GPIOIntEnable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);     // Enable interrupt for GPIO
+    }
+    else if((mask < 0x100) && (mask > 0) && (state == 6))
+    {
+    	if(meccanoTimeout)
+		{
+			/* Error: no Meccano response */
+			mask = 0;
+			state = 0;
+			chargeNewValue = true;
+			GPIOIntDisable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);    // Disable interrupt GPIO (in case it was enabled)
+			GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);  	// Clear interrupt flag
+			TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_10MS);
+		}
+		else
+		{
+			if(GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) != LOW)
+			{
+				meccanoTempByte[0] = meccanoTempByte[0] + mask;
+			}
+			meccanoTimeout = true;
+			TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_1500US);
+			GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);      // Clear pending interrupts for GPIO
+			GPIOIntEnable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);     // Enable interrupt for GPIO
+			mask <<= 1;
+		}
+    }
+
+    if((mask >= 0x100) && (state == 6))
+    {
+    	// if received back 0xFE, then the module exists so get ID number
+    	if (meccanoTempByte[0] == 0xFE)
+    	{
+    		meccanoOutputByte[0][meccanoModuleNum[0]] = 0xFC;
+    	}
+
+    	// if received back 0x01 (module ID is a servo), then change servo color to Blue
+		if (meccanoTempByte[0] == 0x01 && meccanoType[0][meccanoModuleNum[0]] == '_')
+		{
+			meccanoOutputByte[0][meccanoModuleNum[0]] = 0xF4;
+			meccanoType[0][meccanoModuleNum[0]] = 'S';
+		}
+
+		if (meccanoType[0][meccanoModuleNum[0]] == 'L')
+		{
+			if(ledOrder == 0)
+			{
+				meccanoOutputByte[0][meccanoModuleNum[0]] = LEDoutputByte1;
+				ledOrder = 1;
+			}else
+			{
+				meccanoOutputByte[0][meccanoModuleNum[0]] = LEDoutputByte2;
+				ledOrder = 0;
+			}
+		}
+
+		// if received back 0x01 (module ID is a LED), then change servo color to Blue
+		if (meccanoTempByte[0] == 0x02 && meccanoType[0][meccanoModuleNum[0]] == '_')
+		{
+			LEDoutputByte1 = 0x04;
+			LEDoutputByte2 = 0x47;
+			meccanoOutputByte[0][meccanoModuleNum[0]] = LEDoutputByte1;
+			ledOrder = 1;
+			meccanoType[0][meccanoModuleNum[0]] = 'L';
+		}
+
+		if(meccanoTempByte[0] == 0x00)
+		{
+			int x;
+			for(x = meccanoModuleNum[0]; x < 4; x++)
+			{
+				meccanoOutputByte[0][x] = 0xFE;
+				meccanoType[0][x] = '_';
+			}
+		}
+
+		meccanoModuleNum[0]++;                             // increment to next module ID
+		if (meccanoModuleNum[0] > 3)
+		{
+			meccanoModuleNum[0] = 0;
+		}
+
+    	/* Finished */
+		state = 0;
+		mask = 0;
+		chargeNewValue = true;
+		GPIOIntDisable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);    // Disable interrupt GPIO (in case it was enabled)
+		GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);  	// Clear interrupt flag
+        TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_10MS);
+    }
 }
 
 
-
-unsigned long pulseIn(int32_t val, unsigned long timeout)
-{
-    // Max supported pulse length is 7 minutes
-    delayCounter = 0;
-    TimerLoadSet(TIMER5_BASE, TIMER_A, SysCtlClockGet()/100000);
-    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
-
-    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) == LOW)
-    {
-        if(delayCounter > timeout)
-        {
-            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-            return 0;
-        }
+void onMeccanoPinUp(void) {
+    if (GPIOIntStatus(GPIO_MECCANO_BASE, false) & GPIO_MECCANO_PIN) {
+        // GPIO_MECCANO_PIN was interrupt cause
+    	meccanoTimeout = false;
+        TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_500US);
+        GPIOIntDisable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);    // Disable interrupt GPIO (in case it was enabled)
+        GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);  	// Clear interrupt flag
     }
-
-    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-    delayCounter = 0;
-    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
-    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) != LOW)
-    {
-        if(delayCounter > timeout)
-        {
-            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-            return 0;
-        }
-    }
-
-    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-    return delayCounter;
 }
+
 
 void MeccanoInit(void){
+	state = 0;
+	mask = 0;
+	chargeNewValue = false;
+
     //
     // Enable the GPIO port that is used for the on-board LED.
     //
@@ -144,12 +281,54 @@ void MeccanoInit(void){
     //
     // Enable the timers.
     //
-    TimerLoadSet(TIMER0_BASE, TIMER_A, 23500);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, TIMER_LOADVALUE_10MS);
     TimerEnable(TIMER0_BASE, TIMER_A);
+
+	// GPIO Interrupt setup
+	GPIOIntDisable(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);    // Disable interrupt GPIO (in case it was enabled)
+	GPIOIntClear(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);      // Clear pending interrupts for GPIO
+	GPIOIntRegister(GPIO_MECCANO_BASE, onMeccanoPinUp);     // Register our handler function for GPIO port
+	GPIOIntTypeSet(GPIO_MECCANO_BASE,
+				   GPIO_MECCANO_PIN,
+				   GPIO_RISING_EDGE);             			// Configure GPIO for rising edge trigger
 
     return;
 }
 
+
+
+
+//unsigned long pulseIn(int32_t val, unsigned long timeout)
+//{
+//    // Max supported pulse length is 7 minutes
+//    delayCounter = 0;
+//    TimerLoadSet(TIMER5_BASE, TIMER_A, SysCtlClockGet()/100000);
+//    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
+//
+//    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) == LOW)
+//    {
+//        if(delayCounter > timeout)
+//        {
+//            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
+//            return 0;
+//        }
+//    }
+//
+//    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
+//    delayCounter = 0;
+//    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
+//    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) != LOW)
+//    {
+//        if(delayCounter > timeout)
+//        {
+//            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
+//            return 0;
+//        }
+//    }
+//
+//    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
+//    return delayCounter;
+//}
 
 /***** Methods to interact with Smart Modules ******/
 
@@ -264,8 +443,8 @@ The returned byte POS is the servo's position  0x00 - 0xEF, which equals to a fu
 uint8_t getServoPosition(uint8_t servoNum){
     int temp = 0;
     if(moduleType[servoNum] == 'S'){
-        if (moduleNum > 0){
-            temp = moduleNum - 1;
+        if (meccanoModuleNum[0] > 0){
+            temp = meccanoModuleNum[0] - 1;
         }
         else{
             temp = 0;
@@ -292,111 +471,7 @@ uint8_t getServoPosition(uint8_t servoNum){
       Data 4 -  the fifth byte is the data for the Smart module at the 4th position in the chain
       Checksum  -  the sixth byte is part checksum, part module ID.  The module ID tells which of the modules in the chain should reply
    end  */
-void communicate(void){
-    int x;
-    sendByte(0xFF);                         // send header
 
-    for (x = 0; x < 4; x++){                // send 4 data bytes
-        sendByte(outputByte[x]);
-        printOutputByte[x] = outputByte[x];
-    }
-
-    checkSum = calculateCheckSum(outputByte[0],
-                                 outputByte[1],
-                                 outputByte[2],
-                                 outputByte[3]);
-
-    sendByte(checkSum);                    // send checksum
-    inputByte = receiveByte();
-
-    if (inputByte == 0xFE){                 // if received back 0xFE, then the module exists so get ID number
-      outputByte[moduleNum] = 0xFC;
-    }
-
-    if (inputByte == 0x01 && moduleType[moduleNum] == '_'){                 // if received back 0x01 (module ID is a servo), then change servo color to Blue
-        outputByte[moduleNum] = 0xF4;
-        moduleType[moduleNum] = 'S';
-    }
-
-    if (moduleType[moduleNum] == 'L'){
-
-        if(ledOrder == 0){
-            outputByte[moduleNum] = LEDoutputByte1;
-            ledOrder = 1;
-        }else{
-            outputByte[moduleNum] = LEDoutputByte2;
-            ledOrder = 0;
-        }
-
-    }
-
-    if (inputByte == 0x02 && moduleType[moduleNum] == '_'){                 // if received back 0x01 (module ID is a LED), then change servo color to Blue
-        LEDoutputByte1 = 0x04;
-        LEDoutputByte2 = 0x47;
-          outputByte[moduleNum] = LEDoutputByte1;
-          ledOrder = 1;
-        moduleType[moduleNum] = 'L';
-    }
-
-    if(inputByte == 0x00){
-      for(x = moduleNum; x < 4; x++){
-          outputByte[x] = 0xFE;
-          moduleType[x] = '_';
-        }
-
-    }
-
-    printModNum = moduleNum;
-    moduleNum++;                             // increment to next module ID
-    if (moduleNum > 3) {
-        moduleNum = 0;
-    }
-
-    delayMs(10);
-
-}
-
-void sendByte(uint8_t servoData){
-    GPIOPinTypeGPIOOutput(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);
-    GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, LOW);
-    delay417us();                  // start bit - 417us LOW
-
-    int mask;
-    for(mask = 0x01; mask < 0x100; mask <<= 1) {   // iterate through bit mask
-        if (servoData & mask){                           // if bitwise AND resolves to true
-
-            GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);              // send 1
-
-        }else{                                      // if bitwise and resolves to false
-
-            GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, LOW);               // send 0
-        }
-        delay417us();                //delay
-    }
-
-    GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);
-    delay417us();         // stop bit - 417us HIGH
-
-    GPIOPinWrite(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN, GPIO_MECCANO_PIN);
-    delay417us();         // stop bit - 417us HIGH
-
-}
-
-uint8_t receiveByte(void){
-    uint8_t tempByte = 0;
-
-    GPIOPinTypeGPIOInput(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN);
-    //GPIOPadConfigSet(GPIO_MECCANO_BASE,GPIO_MECCANO_PIN,GPIO_STRENGTH_2MA,GPIO_PIN_TYPE_STD_WPU);
-
-    delay1ms5();
-    int mask;
-    for (mask = 0x01; mask < 0x100; mask <<= 1) {   // iterate through bit mask
-        if (pulseIn(HIGH, 250) > 30){
-            tempByte = tempByte + mask;
-        }
-    }
-    return tempByte;
-}
 
 uint8_t calculateCheckSum(uint8_t Data1, uint8_t Data2, uint8_t Data3, uint8_t Data4){
     int CS;
@@ -404,7 +479,7 @@ uint8_t calculateCheckSum(uint8_t Data1, uint8_t Data2, uint8_t Data3, uint8_t D
     CS = CS + (CS >> 8);                  // right shift 8 places
     CS = CS + (CS << 4);                  // left shift 4 places
     CS = CS & 0xF0;                     // mask off top nibble
-    CS = CS | moduleNum;
+    CS = CS | meccanoModuleNum[0];
     return CS;
 }
 
