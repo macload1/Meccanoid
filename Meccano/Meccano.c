@@ -22,13 +22,16 @@
 volatile uint32_t state;
 volatile uint32_t mask;
 
-uint8_t meccanoType[3][4];
+uint8_t meccanoType[3][4] = {{'_', '_', '_', '_'},
+							 {'_', '_', '_', '_'},
+							 {'_', '_', '_', '_'}};
 uint8_t meccanoOutputByte[3][4] = {{0xFE, 0xFE, 0xFE, 0xFE},
 								   {0xFE, 0xFE, 0xFE, 0xFE},
 								   {0xFE, 0xFE, 0xFE, 0xFE}};
 
 uint8_t meccanoChecksum[3];
 uint8_t meccanoTempByte[3];
+uint8_t meccanoInputByte[3];
 
 uint8_t meccanoModuleNum[3] = {0, 0, 0};
 
@@ -79,10 +82,7 @@ Timer0IntHandler(void)
     if(state == 0)
     {
     	outputValue = 0xFF;
-    	meccanoChecksum[0] = calculateCheckSum(meccanoOutputByte[0][0],
-											   meccanoOutputByte[0][1],
-											   meccanoOutputByte[0][2],
-											   meccanoOutputByte[0][3]);
+    	meccanoTempByte[0] = 0;
     }
     else if(state < 5)
     {
@@ -90,7 +90,17 @@ Timer0IntHandler(void)
     }
     else if(state == 5)
     {
+
+    	meccanoChecksum[0] = calculateCheckSum(meccanoOutputByte[0][0],
+											   meccanoOutputByte[0][1],
+											   meccanoOutputByte[0][2],
+											   meccanoOutputByte[0][3]);
     	outputValue = meccanoChecksum[0];
+//		UARTprintf("Sent: %d, %d, %d, %d, %d\r\n", meccanoOutputByte[0][0],
+//												   meccanoOutputByte[0][1],
+//												   meccanoOutputByte[0][2],
+//												   meccanoOutputByte[0][3],
+//												   meccanoChecksum[0]);
     }
 
     if((mask == 0) && (state < 6))
@@ -136,6 +146,11 @@ Timer0IntHandler(void)
     	if(meccanoTimeout)
 		{
 			/* Error: no Meccano response */
+    		meccanoModuleNum[0]++;                             // increment to next module ID
+			if (meccanoModuleNum[0] > 3)
+			{
+				meccanoModuleNum[0] = 0;
+			}
 			mask = 0;
 			state = 0;
 			chargeNewValue = true;
@@ -159,6 +174,7 @@ Timer0IntHandler(void)
 
     if((mask >= 0x100) && (state == 6))
     {
+    	meccanoInputByte[0] = meccanoTempByte[0];
     	// if received back 0xFE, then the module exists so get ID number
     	if (meccanoTempByte[0] == 0xFE)
     	{
@@ -204,6 +220,9 @@ Timer0IntHandler(void)
 				meccanoType[0][x] = '_';
 			}
 		}
+
+//		UARTprintf("module: %d, received: %d\r\n", meccanoModuleNum[0], meccanoTempByte[0]);
+//		UARTprintf("Rcvd: %d, %d, %d, %d\r\n", meccanoOutputByte[0][0], meccanoOutputByte[0][1], meccanoOutputByte[0][2], meccanoOutputByte[0][3]);
 
 		meccanoModuleNum[0]++;                             // increment to next module ID
 		if (meccanoModuleNum[0] > 3)
@@ -296,40 +315,6 @@ void MeccanoInit(void){
 }
 
 
-
-
-//unsigned long pulseIn(int32_t val, unsigned long timeout)
-//{
-//    // Max supported pulse length is 7 minutes
-//    delayCounter = 0;
-//    TimerLoadSet(TIMER5_BASE, TIMER_A, SysCtlClockGet()/100000);
-//    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
-//
-//    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) == LOW)
-//    {
-//        if(delayCounter > timeout)
-//        {
-//            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-//            return 0;
-//        }
-//    }
-//
-//    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-//    delayCounter = 0;
-//    ROM_TimerEnable(TIMER5_BASE, TIMER_A);
-//    while (GPIOPinRead(GPIO_MECCANO_BASE, GPIO_MECCANO_PIN) != LOW)
-//    {
-//        if(delayCounter > timeout)
-//        {
-//            ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-//            return 0;
-//        }
-//    }
-//
-//    ROM_TimerDisable(TIMER5_BASE, TIMER_A);
-//    return delayCounter;
-//}
-
 /***** Methods to interact with Smart Modules ******/
 
 /*    setLEDColor(byte red, byte green, byte blue, byte fadetime)  ->  sets the color and transition/fade time of the Meccano Smart LED module
@@ -379,8 +364,8 @@ setServoColor(2,0xF6)
   end  */
 
 void setServoColor(uint8_t servoNum, uint8_t color){
-    if(moduleType[servoNum] == 'S'){
-        outputByte[servoNum] = color;
+    if(meccanoType[0][servoNum] == 'S'){
+    	meccanoOutputByte[0][servoNum] = color;
     }
 }
 
@@ -397,7 +382,7 @@ The byte POS refers to the servo position  0x00 - 0xEF, which equals to a full 1
 
 void setServoPosition(uint8_t servoNum, uint8_t pos){
     uint8_t servoPos = 0;
-    if(moduleType[servoNum] == 'S'){
+    if(meccanoType[0][servoNum] == 'S'){
 
         if(pos < 0x18){
             servoPos = 0x18;
@@ -407,7 +392,7 @@ void setServoPosition(uint8_t servoNum, uint8_t pos){
             servoPos = pos;
         }
 
-    outputByte[servoNum] = servoPos;
+        meccanoOutputByte[0][servoNum] = servoPos;
     }
 }
 
@@ -422,8 +407,8 @@ LIM stands for Learned Intelligent Movement.  It is a special mode where the ser
 
 
 void setServotoLIM(uint8_t servoNum){
-    if(moduleType[servoNum] == 'S'){
-        outputByte[servoNum] = 0xFA;
+    if(meccanoType[0][servoNum] == 'S'){
+    	meccanoOutputByte[0][servoNum] = 0xFA;
     }
 
 }
@@ -442,7 +427,7 @@ The returned byte POS is the servo's position  0x00 - 0xEF, which equals to a fu
 
 uint8_t getServoPosition(uint8_t servoNum){
     int temp = 0;
-    if(moduleType[servoNum] == 'S'){
+    if(meccanoType[0][servoNum] == 'S'){
         if (meccanoModuleNum[0] > 0){
             temp = meccanoModuleNum[0] - 1;
         }
@@ -450,7 +435,7 @@ uint8_t getServoPosition(uint8_t servoNum){
             temp = 0;
         }
         if(temp == servoNum){
-            return inputByte;
+            return meccanoInputByte[0];
         }
     }
     return 0x00;
